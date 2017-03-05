@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,21 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package ninja.application;
 
-package testapplication.conf;
+import java.util.List;
+import ninja.Filter;
 
-import com.google.inject.AbstractModule;
-
-
-public class Module extends AbstractModule {
-
-    public Module() {
-        super();     
-    }
-  
-    @Override
-    protected void configure() {     
-        // nothing to do
-    }
-
+/**
+ * Allows to define filters that are applied to every request of your application.
+ * 
+ * Implement the class in conf.Filters and setup the filters.
+ * 
+ */
+public interface ApplicationFilters {
+    void addFilters(List<Class<? extends Filter>> filters);
 }

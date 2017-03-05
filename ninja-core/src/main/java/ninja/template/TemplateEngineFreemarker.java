@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,11 +23,13 @@ import java.io.Writer;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 
 import javax.inject.Singleton;
 
 import ninja.Context;
 import ninja.Result;
+import ninja.exceptions.RenderingException;
 import ninja.i18n.Lang;
 import ninja.i18n.Messages;
 import ninja.template.directives.TemplateEngineFreemarkerAuthenticityFormDirective;
@@ -39,7 +41,6 @@ import ninja.utils.ResponseStreams;
 import org.slf4j.Logger;
 
 import com.google.common.base.CaseFormat;
-import com.google.common.base.Optional;
 import com.google.common.collect.Maps;
 import com.google.inject.Inject;
 
@@ -56,8 +57,6 @@ import freemarker.template.Template;
 import freemarker.template.TemplateException;
 import freemarker.template.TemplateNotFoundException;
 import freemarker.template.Version;
-import java.io.StringWriter;
-import ninja.exceptions.RenderingException;
 
 @Singleton
 public class TemplateEngineFreemarker implements TemplateEngine {
@@ -251,7 +250,7 @@ public class TemplateEngineFreemarker implements TemplateEngine {
         }
         
         map.put("contextPath", context.getContextPath());
-        
+        map.put("validation", context.getValidation());
         
         //////////////////////////////////////////////////////////////////////
         // A method that renders i18n messages and can also render messages with 
@@ -259,7 +258,7 @@ public class TemplateEngineFreemarker implements TemplateEngine {
         // E.g.: ${i18n("mykey", myPlaceholderVariable)}
         //////////////////////////////////////////////////////////////////////
         map.put("i18n", new TemplateEngineFreemarkerI18nMethod(messages, context, result));
-
+        
         Optional<String> requestLang = lang.getLanguage(context, Optional.of(result));
         Locale locale = lang.getLocaleFromStringOrDefault(requestLang);
         map.put("prettyTime", new TemplateEngineFreemarkerPrettyTimeMethod(locale));

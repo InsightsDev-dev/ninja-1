@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,19 @@
 package ninja.template;
 
 import java.util.List;
+import java.util.Optional;
 
 import ninja.Context;
 import ninja.Result;
 import ninja.i18n.Messages;
+import ninja.validation.ConstraintViolation;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.Lists;
 
+import freemarker.ext.beans.StringModel;
 import freemarker.template.SimpleNumber;
 import freemarker.template.SimpleScalar;
 import freemarker.template.TemplateMethodModelEx;
@@ -55,13 +57,25 @@ public class TemplateEngineFreemarkerI18nMethod implements
 
     public TemplateModel exec(List args) throws TemplateModelException {
 
-        if (args.size() == 1) {
+        
+        if (args.size() == 1 && args.get(0) instanceof StringModel
+                && ((StringModel) args.get(0)).getWrappedObject() instanceof ConstraintViolation) {
+            
+            ConstraintViolation violation = (ConstraintViolation) ((StringModel) args.get(0)).getWrappedObject();
+
+            String messageValue = messages
+                    .get(violation.getMessageKey(), context, result, violation.getMessageParams())
+                    .orElse(violation.getDefaultMessage());
+            
+            return new SimpleScalar(messageValue);
+            
+        } else if (args.size() == 1) {
             
             String messageKey = ((SimpleScalar) args.get(0)).getAsString();
 
             String messageValue = messages
                     .get(messageKey, context, result)
-                    .or(messageKey);
+                    .orElse(messageKey);
             
             logIfMessageKeyIsMissing(messageKey, messageValue);
             
@@ -91,7 +105,7 @@ public class TemplateEngineFreemarkerI18nMethod implements
                             context, 
                             result, 
                             strings.subList(1, strings.size()).toArray())
-                    .or(messageKey);
+                            .orElse(messageKey);
             
             logIfMessageKeyIsMissing(messageKey, messageValue);
             

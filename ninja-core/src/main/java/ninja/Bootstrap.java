@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ package ninja;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import ninja.application.ApplicationRoutes;
 import ninja.logging.LogbackConfigurator;
-import ninja.params.ParamParser;
 import ninja.utils.NinjaConstant;
 import ninja.utils.NinjaProperties;
 import ninja.utils.NinjaPropertiesImpl;
@@ -29,7 +29,6 @@ import ninja.utils.NinjaPropertiesImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
@@ -37,11 +36,12 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.Singleton;
 import com.google.inject.Stage;
-import com.google.inject.multibindings.Multibinder;
 
 import ninja.conf.FrameworkModule;
 import ninja.conf.NinjaBaseModule;
 import ninja.conf.NinjaClassicModule;
+import ninja.utils.NinjaBaseDirectoryResolver;
+import ninja.utils.SwissKnife;
 
 /**
  * Bootstrap for a Ninja application.  Assists with initializing logging,
@@ -61,6 +61,7 @@ public class Bootstrap {
     static public final String NINJA_CONVENTION_LOCATION = "conf.Ninja";
 
     private final NinjaPropertiesImpl ninjaProperties;
+    protected final NinjaBaseDirectoryResolver ninjaBaseDirectoryResolver;
     private final List<Module> modulesToLoad;
     private final Optional<String> applicationModulesBasePackage;
     private Injector injector = null;
@@ -72,9 +73,10 @@ public class Bootstrap {
         
         // custom base package for application modules (e.g. com.example.conf.Routes)
         this.applicationModulesBasePackage
-            = Optional.fromNullable(ninjaProperties.get(
-                    NinjaConstant.APPLICATION_MODULES_BASE_PACKAGE));
+                = Optional.ofNullable(ninjaProperties.get(
+                        NinjaConstant.APPLICATION_MODULES_BASE_PACKAGE));
         
+        this.ninjaBaseDirectoryResolver = new NinjaBaseDirectoryResolver(ninjaProperties); 
     }
 
     public synchronized void boot() {
@@ -103,6 +105,7 @@ public class Bootstrap {
         
         long injectorStartupTime = System.currentTimeMillis() - startTime;
         logger.info("Ninja injector started in " + injectorStartupTime + " ms.");
+        
         
         // 4. initialize routes
         try {
@@ -141,11 +144,11 @@ public class Bootstrap {
         
         // Main application module (conf.Module or com.example.conf.Module)
         String applicationModuleClassName
-                = resolveApplicationClassName(APPLICATION_GUICE_MODULE_CONVENTION_LOCATION);
+                = ninjaBaseDirectoryResolver.resolveApplicationClassName(APPLICATION_GUICE_MODULE_CONVENTION_LOCATION);
 
         AbstractModule applicationModule = null;
         
-        if (doesClassExist(applicationModuleClassName)) {
+        if (SwissKnife.doesClassExist(applicationModuleClassName, this)) {
             Class<?> applicationModuleClass = Class
                     .forName(applicationModuleClassName);
 
@@ -172,11 +175,11 @@ public class Bootstrap {
         
         // Ninja module
         String applicationNinjaClassName
-                = resolveApplicationClassName(NINJA_CONVENTION_LOCATION);
+                = ninjaBaseDirectoryResolver.resolveApplicationClassName(NINJA_CONVENTION_LOCATION);
 
         final Class<? extends Ninja> ninjaClass;
 
-        if (doesClassExist(applicationNinjaClassName)) {
+        if (SwissKnife.doesClassExist(applicationNinjaClassName, this)) {
 
             final Class<?> clazzPotentially = Class.forName(applicationNinjaClassName);
 
@@ -220,9 +223,9 @@ public class Bootstrap {
     
     public void initRoutes() throws Exception {
         String applicationRoutesClassName
-                = resolveApplicationClassName(ROUTES_CONVENTION_LOCATION);
+                = ninjaBaseDirectoryResolver.resolveApplicationClassName(ROUTES_CONVENTION_LOCATION);
 
-        if (doesClassExist(applicationRoutesClassName)) {
+        if (SwissKnife.doesClassExist(applicationRoutesClassName, this)) {
 
             Class<?> clazz = Class.forName(applicationRoutesClassName);
             
@@ -246,34 +249,6 @@ public class Bootstrap {
              // It is available
         } catch (ClassNotFoundException exception) {
             logger.info("Ninja did not configure any logging because Logback is not on the classpath (you are probably using slf4j-jdk14).");
-        }
-    }
-    
-    protected boolean doesClassExist(String nameWithPackage) {
-
-        boolean exists = false;
-
-        try {
-            Class.forName(nameWithPackage, false, this.getClass()
-                    .getClassLoader());
-            exists = true;
-        } catch (ClassNotFoundException e) {
-            exists = false;
-        }
-
-        return exists;
-
-    }
-
-    protected String resolveApplicationClassName(String classLocationAsDefinedByNinja) {
-        if (applicationModulesBasePackage.isPresent()) {
-            return new StringBuilder()
-                .append(applicationModulesBasePackage.get())
-                .append('.')
-                .append(classLocationAsDefinedByNinja)
-                .toString();
-        } else {
-            return classLocationAsDefinedByNinja;
         }
     }
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,10 @@ import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 public class SwissKnifeTest {
+    
+    // just for testing that camel case conversion stuff works
+    public class MySuperTestObject {
+    }
 
     @Test
     public void testGetRealClassNameLowerCamelCase() {
@@ -32,8 +36,10 @@ public class SwissKnifeTest {
 
     }
 
-    // just for testing that camel case conversion stuff works
-    public class MySuperTestObject {
+    @Test
+    public void testDoesClassExist() {
+        assertEquals(false, SwissKnife.doesClassExist("sdfsfasdf.sadfasdfasdf.asdfasfasdf", this));
+        assertEquals(true, SwissKnife.doesClassExist("java.lang.String", this));
     }
 
 }

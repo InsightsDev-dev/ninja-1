@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,19 +16,25 @@
 
 package ninja.validation;
 
-import com.google.common.base.Optional;
-import com.google.inject.Inject;
-import ninja.Context;
-import ninja.Result;
-import ninja.i18n.Lang;
+import java.io.Serializable;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 import javax.validation.MessageInterpolator;
 import javax.validation.ValidatorFactory;
 import javax.validation.metadata.ConstraintDescriptor;
-import java.io.Serializable;
-import java.util.Locale;
-import java.util.Set;
-import java.util.regex.Pattern;
+
+import org.apache.commons.lang.builder.ToStringBuilder;
+import org.apache.commons.lang.builder.ToStringStyle;
+import org.slf4j.LoggerFactory;
+
+import com.google.inject.Inject;
+
+import ninja.Context;
+import ninja.Result;
+import ninja.i18n.Lang;
 
 /**
  * Built in validators.
@@ -111,7 +117,7 @@ public class Validators {
                 final ValidatorFactory validatorFactory = javax.validation.Validation.buildDefaultValidatorFactory();
                 final javax.validation.Validator validator = validatorFactory.getValidator();
                 final Set<javax.validation.ConstraintViolation<Object>> violations = validator.validate(value);
-                final Locale localeToUse = this.requestLanguage.getLocaleFromStringOrDefault(this.requestLanguage.getLanguage(context, Optional.<Result>absent()));
+                final Locale localeToUse = this.requestLanguage.getLocaleFromStringOrDefault(this.requestLanguage.getLanguage(context, Optional.<Result>empty()));
                 final Validation validation = context.getValidation();
 
                 for (final javax.validation.ConstraintViolation<Object> violation : violations) {
@@ -120,8 +126,10 @@ public class Validators {
                             new NinjaContextMsgInterpolator(value, violation.getConstraintDescriptor()),
                             localeToUse
                     );
-                    final ConstraintViolation constraintViolation = ConstraintViolation.create(violationMessage, violation.getInvalidValue());
-                    validation.addBeanViolation(new FieldViolation(violation.getPropertyPath().toString(), constraintViolation));
+                    final String messageKey = violation.getMessageTemplate().replaceAll("[{}]", "");
+                    final ConstraintViolation constraintViolation = new ConstraintViolation(
+                            messageKey, violation.getPropertyPath().toString(), violationMessage, violation.getInvalidValue());
+                    validation.addViolation(constraintViolation);
                 }
             }
         }
@@ -143,9 +151,8 @@ public class Validators {
         @Override
         public void validate(Object value, String field, Context context) {
             if (value == null) {
-                context.getValidation().addFieldViolation(
-                        field,
-                        ConstraintViolation.createForFieldWithDefault(
+                context.getValidation().addViolation(
+                        new ConstraintViolation(
                                 this.required.key(),
                                 fieldKey(field, this.required.fieldKey()),
                                 this.required.message()));
@@ -177,13 +184,13 @@ public class Validators {
         public void validate(String value, String field, Context context) {
             if (value != null) {
                 if (this.length.max() != -1 && value.length() > this.length.max()) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.length.maxKey(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.length.maxKey(),
                                     fieldKey(field, this.length.fieldKey()),
                                     this.length.maxMessage(), this.length.max(), value));
                 } else if (this.length.min() != -1 && value.length() < this.length.min()) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.length.minKey(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.length.minKey(),
                                     fieldKey(field, this.length.fieldKey()),
                                     this.length.minMessage(), this.length.min(), value));
                 }
@@ -217,8 +224,8 @@ public class Validators {
                 try {
                     Long.parseLong(value);
                 } catch (NumberFormatException e) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.isInteger.key(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.isInteger.key(),
                                     fieldKey(field, this.isInteger.fieldKey()),
                                     this.isInteger.message(), value));
                 }
@@ -252,8 +259,8 @@ public class Validators {
                 try {
                     Double.parseDouble(value);
                 } catch (NumberFormatException e) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.isFloat.key(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.isFloat.key(),
                                     fieldKey(field, this.isFloat.fieldKey()),
                                     this.isFloat.message(), value));
                 }
@@ -287,8 +294,8 @@ public class Validators {
                 try {
                     Double.parseDouble(value);
                 } catch (NumberFormatException e) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.isDate.key(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.isDate.key(),
                                     fieldKey(field, this.isDate.fieldKey()),
                                     this.isDate.message(), value));
                 }
@@ -322,9 +329,8 @@ public class Validators {
         public void validate(String value, String field, Context context) {
             if (value != null) {
                 if (!this.pattern.matcher(value).matches()) {
-                    context.getValidation().addFieldViolation(
-                            field,
-                            ConstraintViolation.createForFieldWithDefault(
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(
                                     this.matches.key(),
                                     fieldKey(field, this.matches.fieldKey()),
                                     this.matches.message(),
@@ -359,14 +365,14 @@ public class Validators {
             if (value != null) {
                 if (this.number.max() != Double.MAX_VALUE
                         && value.doubleValue() > this.number.max()) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.number.maxKey(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.number.maxKey(),
                                     fieldKey(field, this.number.fieldKey()),
                                     this.number.maxMessage(), this.number.max(), value));
                 } else if (this.number.min() != -1
                         && value.doubleValue() < this.number.min()) {
-                    context.getValidation().addFieldViolation(field, ConstraintViolation
-                            .createForFieldWithDefault(this.number.minKey(),
+                    context.getValidation().addViolation(
+                            new ConstraintViolation(this.number.minKey(),
                                     fieldKey(field, this.number.fieldKey()),
                                     this.number.minMessage(), this.number.min(), value));
                 }
@@ -410,7 +416,7 @@ public class Validators {
                     }
                 }
 
-                context.getValidation().addFieldViolation(field, ConstraintViolation.createForFieldWithDefault(
+                context.getValidation().addViolation(new ConstraintViolation(
                         IsEnum.KEY, field, IsEnum.MESSAGE, value, this.isEnum.enumClass().getName()));
             }
         }

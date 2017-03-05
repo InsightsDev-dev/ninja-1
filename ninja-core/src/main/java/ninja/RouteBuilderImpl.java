@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2012-2016 the original author or authors.
+ * Copyright (C) 2012-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,31 +16,57 @@
 
 package ninja;
 
+import com.google.common.collect.Lists;
+import com.google.inject.Inject;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.Set;
-
 import ninja.params.ControllerMethodInvoker;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import com.google.inject.Injector;
+import com.google.inject.Provider;
+import com.google.inject.util.Providers;
+import java.util.List;
+import java.util.Optional;
+import java.util.logging.Level;
+import ninja.ControllerMethods.ControllerMethod;
+import ninja.utils.LambdaRoute;
 import ninja.utils.MethodReference;
+import ninja.utils.NinjaBaseDirectoryResolver;
+import ninja.utils.NinjaProperties;
+import ninja.utils.SwissKnife;
+import ninja.application.ApplicationFilters;
 
 public class RouteBuilderImpl implements RouteBuilder {
-
-    private static final Logger log = LoggerFactory
-            .getLogger(RouteBuilder.class);
+    private static final Logger log = LoggerFactory.getLogger(RouteBuilder.class);
+    
+    protected final static String GLOBAL_FILTERS_DEFAULT_LOCATION = "conf.Filters";
 
     private String httpMethod;
     private String uri;
-    private Class controller;
-    private Method controllerMethod;
-    private Result result;
+    private Method functionalMethod;
+    private Optional<Method> implementationMethod;  // method to use for parameter/annotation extraction
+    private Optional<Object> targetObject;          // instance to invoke
+    private final NinjaProperties ninjaProperties;
+    private Optional<List<Class<? extends Filter>>> globalFiltersOptional;
+    private final List<Class<? extends Filter>> localFilters;
+    private final NinjaBaseDirectoryResolver ninjaBaseDirectoryResolver;
 
+    @Inject
+    public RouteBuilderImpl(
+            NinjaProperties ninjaProperties,
+            NinjaBaseDirectoryResolver ninjaBaseDirectoryResolver) {
+        this.implementationMethod = Optional.empty();
+        this.targetObject = Optional.empty();
+        this.ninjaProperties = ninjaProperties;
+        this.ninjaBaseDirectoryResolver = ninjaBaseDirectoryResolver;
+        this.globalFiltersOptional = Optional.empty();
+        this.localFilters = Lists.newArrayList();
+    }
+    
     public RouteBuilderImpl GET() {
         httpMethod = "GET";
         return this;
@@ -77,20 +103,54 @@ public class RouteBuilderImpl implements RouteBuilder {
     }
 
     @Override
-    public void with(Class controller, String controllerMethod) {
-        this.controller = controller;
-        this.controllerMethod = verifyThatControllerAndMethodExists(controller,
-                controllerMethod);
+    public void with(Class controllerClass, String controllerMethod) {
+        this.functionalMethod
+            = verifyControllerMethod(controllerClass, controllerMethod);
     }
-
-    @Override
-    public void with(MethodReference controllerMethodRef) {
-        with(controllerMethodRef.getDeclaringClass(), controllerMethodRef.getMethodName());
+    
+    @Override @Deprecated
+    public void with(MethodReference methodRef) {
+        with(methodRef.getDeclaringClass(), methodRef.getMethodName());
     }
-
+    
+    @Override @Deprecated
+    public void with(final Result result) {
+        with(ControllerMethods.of(() -> result));
+    }
+    
     @Override
-    public void with(Result result) {
-        this.result = result;
+    public Void with(ControllerMethod controllerMethod) {
+        LambdaRoute lambdaRoute = LambdaRoute.resolve(controllerMethod);
+        this.functionalMethod = lambdaRoute.getFunctionalMethod();
+        this.implementationMethod = lambdaRoute.getImplementationMethod();
+        this.targetObject = lambdaRoute.getTargetObject();
+        return null;
+    }
+    
+    @Override
+    public RouteBuilder globalFilters(List<Class<? extends Filter>> filtersToAdd) {
+        this.globalFiltersOptional = Optional.of(filtersToAdd);
+        return this;
+    }
+    
+    @Override
+    public RouteBuilder globalFilters(Class<? extends Filter> ... filtersToAdd) {
+        List<Class<? extends Filter>> globalFiltersTemp = Lists.newArrayList(filtersToAdd);
+        globalFilters(globalFiltersTemp);
+        return this;
+    }
+    
+    @Override
+    public RouteBuilder filters(List<Class<? extends Filter>> filtersToAdd) {
+        this.localFilters.addAll(filtersToAdd);
+        return this;
+    }
+    
+    @Override
+    public RouteBuilder filters(Class<? extends Filter> ... filtersToAdd) {
+        List<Class<? extends Filter>> filtersTemp = Lists.newArrayList(filtersToAdd);
+        filters(filtersTemp);
+        return this;
     }
 
     @Override
@@ -115,28 +175,22 @@ public class RouteBuilderImpl implements RouteBuilder {
      *            The method
      * @return The actual method
      */
-    private Method verifyThatControllerAndMethodExists(Class controller,
-                                                       String controllerMethod) {
-
+    private Method verifyControllerMethod(Class<?> controllerClass,
+                                          String controllerMethod) {
         try {
-
             Method methodFromQueryingClass = null;
 
             // 1. Make sure method is in class
             // 2. Make sure only one method is there. Otherwise we cannot really
-            // know what
-            // to do with the parameters.
-            for (Method method : controller.getMethods()) {
-
+            // know what to do with the parameters.
+            for (Method method : controllerClass.getMethods()) {
                 if (method.getName().equals(controllerMethod)) {
                     if (methodFromQueryingClass == null) {
                         methodFromQueryingClass = method;
                     } else {
                         throw new NoSuchMethodException();
                     }
-
                 }
-
             }
 
             if (methodFromQueryingClass == null) {
@@ -156,9 +210,8 @@ public class RouteBuilderImpl implements RouteBuilder {
                     "Error while checking for valid Controller / controllerMethod combination",
                     e);
         } catch (NoSuchMethodException e) {
-
             log.error("Error in route configuration!!!");
-            log.error("Can not find Controller " + controller.getName()
+            log.error("Can not find Controller " + controllerClass.getName()
                     + " and method " + controllerMethod);
             log.error("Hint: make sure the controller returns a ninja.Result!");
             log.error("Hint: Ninja does not allow more than one method with the same name!");
@@ -167,80 +220,120 @@ public class RouteBuilderImpl implements RouteBuilder {
     }
 
     /**
-     * Build the route
-     *
-     * @param injector
-     *            The injector to build the route with
+     * Build the route.
+     * @param injector The injector to build the route with
+     * @return The built route
      */
     public Route buildRoute(Injector injector) {
-        if(controller == null && result == null) {
+        if (functionalMethod == null) {
             log.error("Error in route configuration for {}", uri);
-            throw new IllegalStateException("Route not with a controller or result");
+            throw new IllegalStateException("Route missing a controller method");
         }
 
         // Calculate filters
-        LinkedList<Class<? extends Filter>> filters = new LinkedList<Class<? extends Filter>>();
-        if(controller != null) {
-            if (controllerMethod == null) {
-                throw new IllegalStateException(
-                        String.format("Route '%s' does not have a controller method", uri));
-            }
-            filters.addAll(calculateFiltersForClass(controller));
-            FilterWith filterWith = controllerMethod
-                    .getAnnotation(FilterWith.class);
-            if (filterWith != null) {
-                filters.addAll(Arrays.asList(filterWith.value()));
+        LinkedList<Class<? extends Filter>> allFilters = new LinkedList<>();
+        
+        allFilters.addAll(calculateGlobalFilters(this.globalFiltersOptional, injector));
+
+        allFilters.addAll(this.localFilters);
+        
+        allFilters.addAll(calculateFiltersForClass(functionalMethod.getDeclaringClass()));
+        FilterWith filterWith = functionalMethod.getAnnotation(FilterWith.class);
+        if (filterWith != null) {
+            allFilters.addAll(Arrays.asList(filterWith.value()));
+        }
+        
+        FilterChain filterChain = buildFilterChain(injector, allFilters);
+
+        return new Route(httpMethod, uri, functionalMethod, filterChain);
+    }
+    
+    private List<Class<? extends Filter>> calculateGlobalFilters(
+            Optional<List<Class<? extends Filter>>> globalFiltersList,
+            Injector injector) {
+        List<Class<? extends Filter>> allFilters = Lists.newArrayList();
+        // Setting globalFilters in route will deactivate the filters defined
+        // by conf.Filters
+        if (globalFiltersList.isPresent()) {
+            allFilters.addAll(globalFiltersList.get());
+        } else {
+            String globalFiltersWithPrefixMaybe
+                    = ninjaBaseDirectoryResolver.resolveApplicationClassName(GLOBAL_FILTERS_DEFAULT_LOCATION);
+ 
+            if (SwissKnife.doesClassExist(globalFiltersWithPrefixMaybe, this)) {
+                try {
+                    Class<?> globalFiltersClass = Class.forName(globalFiltersWithPrefixMaybe);
+                    ApplicationFilters globalFilters = (ApplicationFilters) injector.getInstance(globalFiltersClass);
+                    globalFilters.addFilters(allFilters);
+                } catch (Exception exception) {
+                    // That simply means the user did not configure conf.Filters.
+                }
             }
         }
-
-        return new Route(httpMethod, uri, controller, controllerMethod,
-                buildFilterChain(injector, filters, controller,
-                        controllerMethod, result));
+        
+        return allFilters;
+    
     }
 
     private FilterChain buildFilterChain(Injector injector,
-                                         LinkedList<Class<? extends Filter>> filters,
-                                         Class<?> controller,
-                                         Method controllerMethod,
-                                         Result result) {
+                                         LinkedList<Class<? extends Filter>> filters) {
 
+                
+       
+         
         if (filters.isEmpty()) {
+            
+            // either target object (functional method) or guice will create new instance
+            Provider<?> targetProvider = (targetObject.isPresent() ?
+                Providers.of(targetObject.get())
+                    : injector.getProvider(functionalMethod.getDeclaringClass()));
 
-            return result != null ? new FilterChainEnd(result) :
-                    new FilterChainEnd(injector.getProvider(controller),
-                            ControllerMethodInvoker.build(controllerMethod, injector));
+            // invoke functional method with optionally using impl for argument extraction
+            ControllerMethodInvoker methodInvoker
+                = ControllerMethodInvoker.build(
+                    functionalMethod, implementationMethod.orElse(functionalMethod), injector, ninjaProperties);
 
+            return new FilterChainEnd(targetProvider, methodInvoker);
+            
         } else {
 
             Class<? extends Filter> filter = filters.pop();
-
-            return new FilterChainImpl(injector.getProvider(filter),
-                    buildFilterChain(injector, filters, controller,
-                            controllerMethod, result));
-
+            
+           
+            Provider<? extends Filter> filterProvider = injector.getProvider(filter);
+                        
+            return new FilterChainImpl(filterProvider,buildFilterChain(injector, filters));
+            
         }
     }
 
-    private Set<Class<? extends Filter>> calculateFiltersForClass(Class controller) {
-        LinkedHashSet<Class<? extends Filter>> filters = new LinkedHashSet<Class<? extends Filter>>();
-        // First step up the superclass tree, so that superclass filters come
-        // first
+    private Set<Class<? extends Filter>> calculateFiltersForClass(
+            Class controller) {
+        LinkedHashSet<Class<? extends Filter>> filters = new LinkedHashSet<>();
+        
+        //
+        // Step up the superclass tree, so that superclass filters come first
+        //
+
         // Superclass
         if (controller.getSuperclass() != null) {
             filters.addAll(calculateFiltersForClass(controller.getSuperclass()));
         }
+        
         // Interfaces
         if (controller.getInterfaces() != null) {
             for (Class clazz : controller.getInterfaces()) {
                 filters.addAll(calculateFiltersForClass(clazz));
             }
         }
+        
         // Now add from here
         FilterWith filterWith = (FilterWith) controller
                 .getAnnotation(FilterWith.class);
         if (filterWith != null) {
             filters.addAll(Arrays.asList(filterWith.value()));
         }
+        
         // And return
         return filters;
     }
